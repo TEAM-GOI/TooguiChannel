@@ -1,0 +1,20 @@
+package com.ssafy.tooguisquare.dto.response;
+
+
+import lombok.Builder;
+
+import java.util.List;
+
+@Builder
+public record SavedRoomResponse(
+        Long roomId,
+        int roomnum,
+        String title,
+        boolean isPrivate,
+        int status,
+        int turnNum,
+        Long channelId,
+        List<RoomPartInfo> userList
+){
+
+}

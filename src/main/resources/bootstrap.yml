@@ -1,7 +1,7 @@
 spring:
   cloud:
     config:
-      uri: http://127.0.0.1:8888 #https://config.toogui.site #http://127.0.0.1:8888, https://config.fluffit.shop
+      uri: https://config.toogui.site #http://127.0.0.1:8888, https://config.fluffit.shop
       name: square-service
   #Profiles을 사용한 Configuration 적용
   #.yml 파일명은 user-service-dev로 설정
