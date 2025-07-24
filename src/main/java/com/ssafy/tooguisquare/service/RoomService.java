@@ -4,6 +4,11 @@ import com.ssafy.tooguisquare.dto.request.RoomEnterRequest;
 import com.ssafy.tooguisquare.dto.response.RoomPartInfo;
 import com.ssafy.tooguisquare.entity.Room;
 import com.ssafy.tooguisquare.exception.CustomBadRequestException;
+import com.ssafy.tooguisquare.exception.CustomRoomEnterException;
+import com.ssafy.tooguisquare.redis.RedisUser;
+import com.ssafy.tooguisquare.redis.RoomUser;
+import com.ssafy.tooguisquare.redis.WaitingRoom;
+import com.ssafy.tooguisquare.repository.RedisRoomRepository;
 import com.ssafy.tooguisquare.repository.RedisUserRepository;
 import com.ssafy.tooguisquare.repository.RoomRepository;
 import com.ssafy.tooguisquare.response.ErrorType;
@@ -25,10 +30,9 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 @Slf4j
 public class RoomService {
-    private final RedisGameRepository redisGameRepository;
+    private final RedisRoomRepository redisRoomRepository;
     private final RedisUserRepository redisUserRepository;
     private final RoomRepository roomRepository;
-    private final UserRepository userRepository;
     private final SimpMessageSendingOperations messageTemplate;
     private final RedissonClient redissonClient;
 
@@ -55,7 +59,7 @@ public class RoomService {
             }
         }
 
-        GameRoom gameRoom;
+        WaitingRoom waitingRoom;
         String lockName = "Member-" + userId;
         RLock rLock = redissonClient.getLock(lockName);
         long waitTime = 5L; //락 획득을 위해 기다리는 시간
@@ -66,16 +70,16 @@ public class RoomService {
                 throw new CustomBadRequestException(ErrorType.LOCK_NOT_AVAILABLE);
             }
             //=== 락 획득 후 로직 수행 ===
-            //gameRoom Redis 정보 가져오기
-            gameRoom = redisGameRepository.getOneGameRoom(room.getId());
-            if(gameRoom == null){
+            //waitingRoom Redis 정보 가져오기
+            waitingRoom = redisRoomRepository.getOneWaitingRoom(room.getId());
+            if(waitingRoom == null){
                 System.out.println("redis 설정 잘못 된듯");
                 throw new CustomBadRequestException(ErrorType.IS_NOT_AVAILABLE_REDIS_GAMEROOM);
             }
 
-            //log.info("현재 그방의 멤버수"+gameRoom.getParticipants().size());
+            //log.info("현재 그방의 멤버수"+waitingRoom.getParticipants().size());
             //방이 가득 찼다.
-            if(gameRoom.getParticipants().size()>=4){
+            if(waitingRoom.getParticipants().size()>=4){
                 log.info("IS_FULL_ROOM");
                 throw new CustomBadRequestException(ErrorType.IS_FULL_ROOM);
             }
@@ -92,19 +96,18 @@ public class RoomService {
                     .build());
 
 //        log.info("참여 신청 유저 아이디: " + user.getId());
-//        for(GameUser tp : gameRoom.getParticipants()){
+//        for(GameUser tp : waitingRoom.getParticipants()){
 //            log.info("enter전 참여자 " + tp.getUserId().toString());
 //        }
             // gameuser 만들어서 Gameroom 에 넣어주고 저장
-            gameRoom.getParticipants().add(
-                    GameUser.builder()
+            waitingRoom.getParticipants().add(
+                    RoomUser.builder()
                             .userId(userId)
                             .isReady(false) //현재 레디에서 문제가 생겨 참가하면 강제 레디로
                             .isManager(false)
-                            .buyInfos(new ArrayList<>())
                             .build());
-            // gameroom에 저장
-            redisGameRepository.updateGameRoom(gameRoom);
+            // waitingroom에 저장
+            redisRoomRepository.updateWaitingRoom(waitingRoom);
 
         }catch(InterruptedException e) {
             log.error(e.getMessage());
@@ -117,11 +120,11 @@ public class RoomService {
             }
         }
 
-        return getRoomPartList(gameRoom);
+        return getRoomPartList(waitingRoom);
     }
 
     public List<RoomPartInfo> getUserList(Long rId){
-        GameRoom room = redisGameRepository.getOneGameRoom(rId);
+        WaitingRoom room = redisRoomRepository.getOneWaitingRoom(rId);
         if(room == null){
             throw new CustomBadRequestException(ErrorType.NOT_FOUND_ROOM);
         }
@@ -129,36 +132,36 @@ public class RoomService {
     }
 
     @Transactional
-    public List<RoomPartInfo> exitRoom(User user, Long rId){
+    public List<RoomPartInfo> exitRoom(Long userId, Long rId){
         //log.info("RoomService exitRoom start");
-        GameRoom room = redisGameRepository.getOneGameRoom(rId);
-        if(room == null){
+        WaitingRoom wroom = redisRoomRepository.getOneWaitingRoom(rId);
+        if(wroom == null){
             throw new CustomBadRequestException(ErrorType.NOT_FOUND_ROOM);
         }
-        //log.info("방 아이디 값은 " + room.getId().toString());
+        //log.info("방 아이디 값은 " + wroom.getId().toString());
 
-        GameUser gameUser = new GameUser();
+        RoomUser roomUser = new RoomUser();
         //log.info("요청 유저 아이디: " + user.getId());
-        gameUser.setUserId(user.getId());
-//        for(GameUser tp : room.getParticipants()){
+        roomUser.setUserId(userId);
+//        for(GameUser tp : wroom.getParticipants()){
 //            log.info("참여자 " + tp.getUserId().toString());
 //        }
-        int idx = room.getParticipants().indexOf(gameUser);
+        int idx = wroom.getParticipants().indexOf(roomUser);
         //log.info("gameuser인덱스값이 " + idx);
         if(idx == -1) throw new CustomBadRequestException(ErrorType.NOT_FOUND_USER);
-        gameUser = room.getParticipants().get(idx); //탈퇴한 유저의 객체
+        roomUser = wroom.getParticipants().get(idx); //탈퇴한 유저의 객체
 
-        if(room.getParticipants().size() != 1){ //남아있는 인원이 2명 이상
-            //log.info("방 나가기 전 방 안의 유저 수"+room.getParticipants().size());
-            room.getParticipants().remove(idx);
-            if(gameUser.isManager()){ //방장 권한을 가장 먼저 들어온 유저에게 위임
-                room.getParticipants().get(0).setManager(true);
-                room.getParticipants().get(0).setReady(true);
+        if(wroom.getParticipants().size() >= 2){ //남아있는 인원이 2명 이상
+            //log.info("방 나가기 전 방 안의 유저 수"+wroom.getParticipants().size());
+            wroom.getParticipants().remove(idx);
+            if(roomUser.isManager()){ //방장 권한을 가장 먼저 들어온 유저에게 위임
+                wroom.getParticipants().get(0).setManager(true);
+                wroom.getParticipants().get(0).setReady(true);
             }
-            redisGameRepository.updateGameRoom(room);
-            //log.info("방 나가기 후 방 안의 유저 수"+room.getParticipants().size());
+            redisRoomRepository.updateWaitingRoom(wroom);
+            //log.info("방 나가기 후 방 안의 유저 수"+wroom.getParticipants().size());
         }else { //한명이 남아있었으므로 방 삭제까지 같이 수행
-            redisGameRepository.deleteGameRoom(rId);
+            redisRoomRepository.deleteWaitingRoom(rId);
             Optional<Room> tmp = roomRepository.findById(rId);
             if(tmp.isEmpty()) throw new CustomBadRequestException(ErrorType.NOT_FOUND_ROOM);
             tmp.get().updateStatus(2); //room테이블에 없어진 방 처리
@@ -166,19 +169,19 @@ public class RoomService {
         }
 
         try {
-            redisUserRepository.deleteUser(user.getId());
+            redisUserRepository.deleteUser(userId);
         }catch(Exception e){
             //log.info("역시나 적시나 존시나 딜리트RedisUser안됨");
             throw new CustomBadRequestException(ErrorType.IS_NOT_AVAILABLE_REDISUSER);
         }
 
-        return getRoomPartList(room);
+        return getRoomPartList(wroom);
     }
 
     @Transactional
     public List<RoomPartInfo> kickUser(User user, Long targetId, Long rId){
         //log.info("RoomService kickUser start");
-        GameRoom room = redisGameRepository.getOneGameRoom(rId);
+        GameRoom room = redisRoomRepository.getOneGameRoom(rId);
         if(room == null){
             throw new CustomBadRequestException(ErrorType.NOT_FOUND_ROOM);
         }
@@ -199,7 +202,7 @@ public class RoomService {
         //log.info("강퇴 요청한 유저 id"+target.getUserId()+"  포인트 =="+target.getPoint());
         if(idx == -1) throw new CustomBadRequestException(ErrorType.NOT_FOUND_USER);
         room.getParticipants().remove(idx); //강퇴 당할 유저를 redis 참가자 리스트에서 삭제
-        redisGameRepository.updateGameRoom(room);
+        redisRoomRepository.updateGameRoom(room);
         redisUserRepository.deleteUser(targetId); //redis 유저에서도 삭제
 
         return getRoomPartList(room);
@@ -207,7 +210,7 @@ public class RoomService {
 
     @Transactional
     public ReadyResponse doingRoomReady(User user, Long grId){
-        GameRoom room = redisGameRepository.getOneGameRoom(grId);
+        GameRoom room = redisRoomRepository.getOneGameRoom(grId);
         if(room == null){
             throw new CustomBadRequestException(ErrorType.NOT_FOUND_ROOM);
         }
@@ -233,7 +236,7 @@ public class RoomService {
 
         //GameRoom(redis)에 정보 업데이트
         //room.setParticipants(gameUserList);
-        redisGameRepository.updateGameRoom(room);
+        redisRoomRepository.updateGameRoom(room);
 
         int status = 0;
         if(cnt == room.getParticipants().size()){
@@ -256,19 +259,19 @@ public class RoomService {
                 .build();
     }
 
-    public List<RoomPartInfo> getRoomPartList(GameRoom groom){
+    public List<RoomPartInfo> getRoomPartList(WaitingRoom wroom){
         List<RoomPartInfo> rstList = new ArrayList<>();
-        for(GameUser gu : groom.getParticipants()){
-            Optional<User> tmp = userRepository.findById(gu.getUserId());
+        for(RoomUser ru : wroom.getParticipants()){
+            Optional<User> tmp = userRepository.findById(ru.getUserId()); // 후에 Feign Client로 user-service 정보 요청해 가져오기
             if(tmp.isEmpty()) throw new CustomBadRequestException(ErrorType.NOT_FOUND_USER);
             rstList.add(RoomPartInfo.builder()
-                    .userId(gu.getUserId())
+                    .userId(ru.getUserId())
                     .userNick(tmp.get().getNickName())
-                    .isReady(gu.isReady())
-                    .isManager(gu.isManager())
+                    .isReady(ru.isReady())
+                    .isManager(ru.isManager())
                     .exp(tmp.get().getExp())
                     .imageId(tmp.get().getImageId())
-                    .roomId(groom.getId())
+                    .roomId(wroom.getId())
                     .build());
         }
         return rstList;

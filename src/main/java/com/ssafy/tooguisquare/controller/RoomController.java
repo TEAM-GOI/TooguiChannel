@@ -44,8 +44,8 @@ public class RoomController {
 
     //방 나가기
     @DeleteMapping("/exit/{id}")
-    public SuccessResponse<Void> exitRoom(@AuthenticationPrincipal User user, @PathVariable("id") Long rId){
-        List<RoomPartInfo> rInfo = roomService.exitRoom(user, rId);
+    public SuccessResponse<Void> exitRoom(@RequestHeader("memberId") Long userId, @PathVariable("id") Long rId){
+        List<RoomPartInfo> rInfo = roomService.exitRoom(userId, rId);
         messageTemplate.convertAndSend("/sub/room/chat/" + rId,
                 MessageDto
                         .builder()

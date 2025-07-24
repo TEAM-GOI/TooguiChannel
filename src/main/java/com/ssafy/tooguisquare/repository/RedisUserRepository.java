@@ -1,9 +1,9 @@
 package com.ssafy.tooguisquare.repository;
 
+import com.ssafy.tooguisquare.redis.RedisUser;
 import jakarta.annotation.Resource;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.stereotype.Repository;
-import ssafy.GeniusOfInvestment._common.redis.RedisUser;
 
 @Repository
 public class RedisUserRepository {
